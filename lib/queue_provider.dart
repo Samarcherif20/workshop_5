@@ -5,6 +5,8 @@ import 'models/client.dart';
 import 'package:uuid/uuid.dart';
 import 'local_queue_service.dart';
 import 'geolocation_service.dart';
+import 'package:connectivity_plus/connectivity_plus.dart';
+
 
 class QueueProvider extends ChangeNotifier {
   final List<Client> _clients = [];
@@ -24,6 +26,7 @@ class QueueProvider extends ChangeNotifier {
   Future<void> initialize() async {
     await _loadQueue();
     _setupRealtimeSubscription();
+    _monitorConnectivity(); // ✅ start listening
   }
 
   Future<void> _loadQueue() async {
@@ -42,8 +45,16 @@ class QueueProvider extends ChangeNotifier {
     for (var client in unsynced) {
       try {
         final remoteClient = Map<String, dynamic>.from(client)
-          ..remove('is_synced');
-        await _supabase.from('clients').upsert(remoteClient);
+        ..remove('is_synced') // remove SQLite integer
+        ..['is_synced'] = true; // ✅ explicitly set to true
+        print('Upserting to Supabase: $remoteClient');
+
+final response = await _supabase
+  .from('clients')
+  .upsert(remoteClient, onConflict: 'id')
+  .select();
+
+print('Supabase response: $response');
         await _localDb.markClientAsSynced(client['id'] as String);
       } catch (e) {
         print('Sync failed for ${client['id']}: $e');
@@ -155,18 +166,46 @@ class QueueProvider extends ChangeNotifier {
       print('Failed to add client locally: $e');
     }
   }
+Future<void> _syncAddClientToRemote(Map<String, dynamic> client) async {
+  try {
+    final remoteClient = Map<String, dynamic>.from(client)
+      ..remove('is_synced')
+      ..['is_synced'] = true;
 
-  Future<void> _syncAddClientToRemote(Map<String, dynamic> client) async {
-    try {
-      final remoteClient = Map<String, dynamic>.from(client)
-        ..remove('is_synced');
-      await _supabase.from('clients').upsert(remoteClient);
+    print('Upserting to Supabase: $remoteClient');
+
+    final response = await _supabase
+        .from('clients')
+        .upsert(remoteClient, onConflict: 'id')
+        .select();
+
+    print('Supabase response: $response');
+
+    // ✅ Only mark as synced if Supabase responded successfully
+    if (response is List && response.isNotEmpty) {
       await _localDb.markClientAsSynced(client['id'] as String);
+      await _localDb.debugPrintAllClients();
+
+      // Refresh local client state
+      final updatedClientMap = await _localDb.getClients();
+      final updatedClient = updatedClientMap.firstWhere((c) => c['id'] == client['id']);
+      final index = _clients.indexWhere((c) => c.id == client['id']);
+      if (index != -1) {
+        _clients[index] = Client.fromMap(updatedClient);
+        notifyListeners();
+      }
+
       print('Client synced to remote: ${client['name']}');
-    } catch (e) {
-      print('Failed to sync client to remote: $e');
+    } else {
+      print('Supabase did not return a valid response. Skipping mark as synced.');
     }
+  } catch (e) {
+    print('Failed to sync client to remote: $e');
+    // ❌ Do NOT mark as synced here
   }
+}
+
+
 
   Future<void> removeClient(String id) async {
     try {
@@ -206,4 +245,14 @@ class QueueProvider extends ChangeNotifier {
     _supabase.removeChannel(_subscription);
     super.dispose();
   }
+  void _monitorConnectivity() {
+  final connectivity = Connectivity();
+  connectivity.onConnectivityChanged.listen((result) {
+    if (result != ConnectivityResult.none) {
+      print('🔌 Internet reconnected — retrying sync');
+      _syncLocalToRemote();
+    }
+  });
+}
+
 }
