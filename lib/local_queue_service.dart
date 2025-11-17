@@ -1,4 +1,3 @@
-// lib/local_queue_service.dart
 import 'package:sqflite/sqflite.dart';
 import 'package:path/path.dart';
 
@@ -6,7 +5,9 @@ class LocalQueueService {
   static Database? _database;
   static const String tableName = 'local_clients';
   final bool _inMemory;
+
   LocalQueueService({bool inMemory = false}) : _inMemory = inMemory;
+
   Future<Database> get database async {
     if (_database != null) return _database!;
     _database = await _initDB();
@@ -15,25 +16,43 @@ class LocalQueueService {
 
   Future<Database> _initDB() async {
     if (_inMemory) {
-      return await openDatabase(':memory:', version: 1, onCreate: _onCreate);
+      return openDatabase(
+        ':memory:',
+        version: 2,
+        onCreate: _onCreate,
+        onUpgrade: _onUpgrade,
+      );
     } else {
       final dbPath = await getDatabasesPath();
       final path = join(dbPath, 'waiting_room.db');
-      return openDatabase(path, version: 1, onCreate: _onCreate);
+      return openDatabase(
+        path,
+        version: 2,
+        onCreate: _onCreate,
+        onUpgrade: _onUpgrade,
+      );
     }
   }
 
-  void _onCreate(Database db, int version) async {
+  Future<void> _onCreate(Database db, int version) async {
     await db.execute('''
-CREATE TABLE $tableName (
- id TEXT PRIMARY KEY,
- name TEXT NOT NULL,
- lat REAL,
- lng REAL,
- created_at TEXT NOT NULL,
- is_synced INTEGER NOT NULL DEFAULT 0
- )
- ''');
+      CREATE TABLE $tableName (
+        id TEXT PRIMARY KEY,
+        name TEXT NOT NULL,
+        lat REAL,
+        lng REAL,
+        created_at TEXT NOT NULL,
+        is_synced INTEGER NOT NULL DEFAULT 0,
+        waiting_room_id TEXT
+      )
+    ''');
+  }
+
+  Future<void> _onUpgrade(Database db, int oldVersion, int newVersion) async {
+    if (oldVersion < 2) {
+      await db.execute('ALTER TABLE $tableName ADD COLUMN waiting_room_id TEXT;');
+      print('➡️ Migration applied: waiting_room_id added');
+    }
   }
 
   Future<void> insertClientLocally(Map<String, dynamic> client) async {
@@ -63,16 +82,16 @@ CREATE TABLE $tableName (
       where: 'id = ?',
       whereArgs: [id],
     );
-    print('Marked client $id as synced. Rows affected: $count');
+    print('Marked $id as synced. rows=$count');
   }
-  Future<void> debugPrintAllClients() async {
-  final db = await database;
-  final result = await db.query(tableName);
-  for (var row in result) {
-    print('🧾 Client in DB: ${row['id']} | is_synced: ${row['is_synced']}');
-  }
-}
 
+  Future<void> debugPrintAllClients() async {
+    final db = await database;
+    final rows = await db.query(tableName);
+    for (final row in rows) {
+      print('🧾 Row: $row');
+    }
+  }
 
   Future<void> close() async {
     final db = _database;

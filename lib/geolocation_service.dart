@@ -2,28 +2,40 @@ import 'package:geolocator/geolocator.dart';
 
 class GeolocationService {
   Future<Position?> getCurrentPosition() async {
-    // 1. Check & request permission
-
+    print('🔍 Checking permissions...');
     var permission = await Geolocator.checkPermission();
+
     if (permission == LocationPermission.denied) {
       permission = await Geolocator.requestPermission();
+      if (permission == LocationPermission.denied) {
+        print('❌ Permission denied');
+        return null;
+      }
     }
-    if (permission != LocationPermission.whileInUse &&
-        permission != LocationPermission.always) {
+
+    if (permission == LocationPermission.deniedForever) {
+      print('❌ Permission denied forever');
       return null;
     }
-    // 2. Ensure location services are enabled
-    if (!(await Geolocator.isLocationServiceEnabled())) {
+
+    print('✅ Permission granted');
+
+    final serviceEnabled = await Geolocator.isLocationServiceEnabled();
+    if (!serviceEnabled) {
+      print('❌ Location services disabled');
       return null;
     }
-    // 3. Fetch position
+    print('✅ Location services enabled');
+
     try {
-      return await Geolocator.getCurrentPosition(
-        desiredAccuracy: LocationAccuracy.low,
-        timeLimit: const Duration(seconds: 10),
+      final position = await Geolocator.getCurrentPosition(
+        desiredAccuracy: LocationAccuracy.high,
+        timeLimit: const Duration(seconds: 20), // timeout élargi
       );
+      print('✅ Position obtained: ${position.latitude}, ${position.longitude}');
+      return position;
     } catch (e) {
-      print('Geolocation error: $e');
+      print('❌ Geolocation error: $e');
       return null;
     }
   }
